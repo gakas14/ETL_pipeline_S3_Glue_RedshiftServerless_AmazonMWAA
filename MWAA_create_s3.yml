@@ -1,0 +1,244 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: CloudFormation template to create S3 source and destination buckets
+
+Parameters:       
+
+  S3SourceBucketName:
+    Description: Source S3 bucket to be created. <username>-MWAA-Project-inp-bucket-etl
+    Type: String
+    Default: gakas-mwaa-project-inp-bucket-etl
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9_-]*"
+
+  DirsToCreateinSrcBucket:
+    Description: Comma delimited list of directories to be created. Replace the folder names based on current date
+    Type: CommaDelimitedList
+    Default: products/year=2025/month=03/day=04
+
+  S3TargetBucketName:
+    Description: Target S3 bucket to be created. <username>-MWAA-Project-opt-bucket-etl
+    Type: String
+    Default: gakas-mwaa-project-opt-bucket-etl
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9_-]*"
+
+  DirsToCreateinTgtBucket:
+    Description: Comma delimited list of directories to be created
+    Type: CommaDelimitedList
+    Default: products
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: S3 parameters
+        Parameters:
+            - S3SourceBucketName
+            - S3TargetBucketName
+            - DirsToCreateinSrcBucket
+            - DirsToCreateinTgtBucket
+
+    ParameterLabels:
+      S3SourceBucketName:
+        default: "Source Bucket Name"
+      DirsToCreateinSrcBucket:
+        default: "Directories under Source S3 bucket"
+      S3TargetBucketName:
+        default: "Target Bucket Name"
+      DirsToCreateinTgtBucket:
+        default: "Directories under Target S3 bucket"
+
+Resources:
+
+  SourceS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3SourceBucketName
+
+  S3CustomResourceSrc:
+    Type: Custom::S3CustomResource
+    Properties:
+      ServiceToken: !GetAtt AWSLambdaFunction.Arn
+      the_bucket: !Ref S3SourceBucketName
+      dirs_to_create: !Ref DirsToCreateinSrcBucket
+
+  TargetS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3TargetBucketName
+
+  S3CustomResourceTgt:
+    Type: Custom::S3CustomResource
+    Properties:
+      ServiceToken: !GetAtt AWSLambdaFunction.Arn
+      the_bucket: !Ref S3TargetBucketName
+      dirs_to_create: !Ref DirsToCreateinTgtBucket
+
+  AWSLambdaFunction:
+     Type: "AWS::Lambda::Function"
+     Properties:
+       Description: "This lambda function will create the S3 Buckets!"
+       FunctionName: !Sub '${AWS::StackName}-${AWS::Region}-lambda'
+       Handler: index.handler
+       Role: !GetAtt AWSLambdaExecutionRole.Arn
+       Timeout: 360
+       Runtime: python3.9
+       Code:
+         ZipFile: |
+          import boto3
+          import cfnresponse
+          def handler(event, context):
+              # Init ...
+              the_event = event['RequestType']
+              print("The event is: ", str(the_event))
+              response_data = {}
+              s_3 = boto3.client('s3')
+              # Retrieve parameters
+              the_bucket = event['ResourceProperties']['the_bucket']
+              dirs_to_create = event['ResourceProperties']['dirs_to_create']
+              try:
+                  if the_event in ('Create', 'Update'):
+                      print("Requested folders: ", str(dirs_to_create))
+                      for dir_name in dirs_to_create:
+                          print("Creating: ", str(dir_name))
+                          s_3.put_object(Bucket=the_bucket,
+                                         Key=(dir_name
+                                              + '/'))
+                  elif the_event == 'Delete':
+                      print("Deleting S3 content...")
+                      b_operator = boto3.resource('s3')
+                      b_operator.Bucket(str(the_bucket)).objects.all().delete()
+                  # Everything OK... send the signal back
+                  print("Operation successful!")
+                  cfnresponse.send(event,
+                                   context,
+                                   cfnresponse.SUCCESS,
+                                   response_data)
+              except Exception as e:
+                  print("Operation failed...")
+                  print(str(e))
+                  response_data['Data'] = str(e)
+                  cfnresponse.send(event,
+                                   context,
+                                   cfnresponse.FAILED,
+                                   response_data)
+
+  DataGenCustomResource:
+    Type: Custom::S3CustomResource
+    Properties:
+      ServiceToken: !GetAtt DataGeneratorLambda.Arn
+
+  DataGeneratorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub  '${AWS::StackName}-gen_products_dataset' #!Sub '${AWS::StackName}-${AWS::Region}-lambda'
+      Description: "Generate test dataset"
+      Handler: index.lambda_handler
+      Role: !GetAtt AWSLambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          S3BucketName: !Ref S3SourceBucketName
+          Dirs: !Join [",", !Ref DirsToCreateinSrcBucket] 
+      Runtime: python3.12
+      Timeout: 600
+      Code:
+        ZipFile: |
+          import boto3
+          import csv
+          import os
+          import uuid
+          import random
+          import json
+          import time
+          import string
+          import cfnresponse
+
+          bucket_name = os.environ['S3BucketName']
+          file_name = "products.csv"
+          output_file_name = os.environ['Dirs'] + "/" + file_name
+          tmp_file_name = "/tmp/" + file_name
+          fields = ['product_id', 'product_name', 'category', 'discounted_price', 'actual_price', 'discount_percentage', 'rating_count', 'about_product', 'user_id', 'user_name', 'review_id', 'review_title', 'review_content', 'img_link', 'product_link'] 
+
+          s3_client = boto3.client("s3")
+
+          def gen_record():
+    
+            products = [{"product_id": ''.join(random.choices(string.ascii_uppercase + string.digits, k = 10)), "product_name": "Computer "+str(random.randrange(1,500)), "category": "Computers&Accessories", 
+              "discounted_price": random.randrange(1,3000), "actual_price": random.randrange(3001,5001),
+               "discount_percentage": str(random.randrange(1,100))+"%" ,"rating_count": random.randrange(1,25000),
+               "about_product": ''.join(random.choices(string.ascii_lowercase + string.digits, k = 100)), "user_id": ''.join(random.choices(string.ascii_uppercase + string.digits, k = 10)), 
+               "user_name": "User"+str(random.randrange(1,500)), "review_id":  ''.join(random.choices(string.ascii_uppercase + string.digits, k = 10)), 
+               "review_title": ''.join(random.choices(string.ascii_lowercase + string.digits, k = 100)), "review_content": ''.join(random.choices(string.ascii_lowercase + string.digits, k = 100)),
+               "img_link": "https://m.media-amazon.com/images/"+str(random.randrange(1,500))+".jpg", "product_link": "https://www.amazon.com/"+str(random.randrange(1,500))}]
+            return products        
+        
+          def lambda_handler(event, context):
+    
+            response_data = {}
+            with open(tmp_file_name, "w+", newline="\n", encoding="utf-8") as w:
+              writer = csv.DictWriter(w, delimiter=",", fieldnames=fields)
+              writer.writeheader()
+              for i in range(100):
+                products=gen_record()
+                for row in products:
+                  writer.writerow(row)
+                time.sleep(1)
+        
+            s3_client.upload_file(tmp_file_name, bucket_name, output_file_name)
+
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+
+  AWSLambdaExecutionRole:
+     Type: AWS::IAM::Role
+     Properties:
+       AssumeRolePolicyDocument:
+         Statement:
+         - Action:
+           - sts:AssumeRole
+           Effect: Allow
+           Principal:
+             Service:
+             - lambda.amazonaws.com
+         Version: '2012-10-17'
+       Path: "/"
+       Policies:
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - logs:CreateLogGroup
+             - logs:CreateLogStream
+             - logs:PutLogEvents
+             Effect: Allow
+             Resource: arn:aws:logs:*:*:*
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambda-CW
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:PutObject
+             - s3:DeleteObject
+             - s3:ListBucket
+             - s3:ListAllMyBuckets
+             - s3:ListMultipartUploadParts
+             - s3:ListBucketMultipartUploads
+             - s3:ListBucketVersions
+             Effect: Allow
+             Resource:
+             - !Sub arn:aws:s3:::${SourceS3Bucket}/*
+             - !Sub arn:aws:s3:::${SourceS3Bucket}
+             - !Sub arn:aws:s3:::${TargetS3Bucket}/*
+             - !Sub arn:aws:s3:::${TargetS3Bucket}
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambda-S3
+       RoleName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambdaExecutionRole
+
+
+
+
+
+
+
+
+
+
+
+

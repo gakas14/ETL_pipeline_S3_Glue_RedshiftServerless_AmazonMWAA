@@ -1,0 +1,842 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: CloudFormation template to create pre-requisite resources for MWAA blog
+
+Parameters:       
+
+### S3 PARAMETERS ###
+
+  S3BucketName:
+    Description: S3 bucket to be created for MWAA. Enter in format airflow-<username>-bucket
+    Type: String
+    Default: gakas-mwaa-github-bucket
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9_-]*"
+
+  DirsToCreate:
+    Description: Comma delimited list of directories to be created
+    Type: CommaDelimitedList
+    Default: dags,plugins,requirements,scripts,data
+
+  SourceS3Path:
+    Description: S3 path of source account containing input files. Enter in the format s3://sample-inp-bucket-etl-<username>/products
+    Default: gakas-mwaa-project-inp-bucket-etl/products
+    Type: String
+
+### REDSHIFT PARAMETERS ###
+
+  DatabaseName:
+    Description: The name of the first database in the Amazon Redshift Serverless environment
+    Type: String
+    Default: dev
+    MaxLength: 127
+    AllowedPattern: '[a-zA-Z][a-zA-Z_0-9+.@-]*'
+  
+  AdminUsername:
+    Description: The administrator's user name for Redshift Serverless Namespace being created
+    Type: String
+    Default: admin
+    AllowedPattern: '[a-zA-Z][a-zA-Z_0-9+.@-]*'
+  
+  AdminUserPassword:
+    Description: The password associated with admin user
+    Type: String
+    NoEcho: 'true'
+    MinLength: 8
+    MaxLength: 64
+    AllowedPattern: '^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[^\x00-\x20\x22\x27\x2f\x40\x5c\x7f-\uffff]+'
+  
+  NamespaceName:
+    Description: A unique identifier that defines the Namespace
+    Type: String
+    Default: sample-namespace
+    MinLength: 3
+    MaxLength: 64
+    AllowedPattern: '^[a-z0-9-]+$'
+  
+  WorkgroupName:
+    Description: A unique identifier that defines the Workspace
+    Type: String
+    Default: sample-workgroup
+    MinLength: 3
+    MaxLength: 64
+    AllowedPattern: '^[a-z0-9-]*$'
+  
+  BaseRPU:
+    Description: Base RPU for Redshift Serverless Workgroup (the minimum number of Redshift Processing Units (RPUs) that are available for a data warehouse)
+    Type: Number
+    MinValue: 8
+    MaxValue: 512
+    Default: 8
+    AllowedValues: [8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152,160,168,176,184,192,200,208,216,224,232,240,248,256,264,272,280,288,296,304,312,320,328,336,344,352,360,368,376,384,392,400,408,416,424,432,440,448,456,464,472,480,488,496,504,512]
+
+  SubnetId:
+    Description: You must have at least three subnets, and they must span across three Availability Zones
+    Type: List<AWS::EC2::Subnet::Id>
+  
+  SecurityGroupIds:
+    Description: The list of SecurityGroupIds in your Virtual Private Cloud (VPC)
+    Type: List<AWS::EC2::SecurityGroup::Id>
+  
+  LogExportsList:
+    Description: Provide comma seperate values from list "userlog","connectionlog","useractivitylog".  E.g userlog,connectionlog,useractivitylog.  If left blank, LogExport is turned off
+    Type: CommaDelimitedList 
+    Default: userlog,connectionlog,useractivitylog
+  
+  EnhancedVpcRouting:
+    Description: The value that specifies whether to enable enhanced virtual private cloud (VPC) routing, which forces Amazon Redshift Serverless to route traffic through your VPC
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false    
+
+  VpcId:
+    Description: The VPCId in which Redshift workgroup to be created
+    Type: "AWS::EC2::VPC::Id"
+
+  RouteTableId:
+    Description: The RouteTableId which is associated with above VPC
+    Type: String
+
+### GLUE PARAMETERS ###
+
+  GlueCrawlerName:  
+    Description: Name of the crawler to be created
+    Type: String
+    Default: mwaa_crawler_products
+ 
+  GlueDatabaseName:
+    Description: Name of the database to be created to contain tables
+    Type: String
+    Default: mwaa_db
+
+  GlueTableName:
+    Description: Name of the table to be created to contain tables
+    Type: String
+    Default: products
+
+  GlueConnectionName:  
+    Description: Name of the connection to Redshift
+    Type: String
+    Default: conn_redshift
+
+  GlueJobName:  
+    Description: Name of the Glue job to be created
+    Type: String
+    Default: mwaa_glue_job
+
+  GlueScriptsPath:  
+    Description: Enter glue script uri in format s3://aws-glue-assets-<account-id>-<region>/scripts/sample_glue_job.py
+    Type: String
+
+### MWAA PARAMETERS ###
+
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.192.0.0/16
+
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.10.0/24
+
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 10.192.11.0/24
+
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.20.0/24
+
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.192.21.0/24
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: S3 parameters
+        Parameters:
+            - S3BucketName
+            - DirsToCreate
+            - SourceS3Path
+      - Label:
+          default: Redshift Namespace parameters
+        Parameters:
+          - NamespaceName
+          - DatabaseName
+          - AdminUsername
+          - AdminUserPassword
+          - LogExportsList          
+      - Label:
+          default: Redshift Workgroup parameters
+        Parameters:
+            - WorkgroupName
+            - BaseRPU
+            - SubnetId
+            - SecurityGroupIds
+            - EnhancedVpcRouting       
+            - VpcId
+            - RouteTableId
+      - Label:
+          default: Glue parameters
+        Parameters:
+            - GlueCrawlerName
+            - GlueDatabaseName
+            - GlueTableName
+            - GlueConnectionName
+            - GlueJobName
+            - GlueScriptsPath
+      - Label:
+          default: MWAA parameters
+        Parameters:
+            - VpcCIDR
+            - PublicSubnet1CIDR
+            - PublicSubnet2CIDR
+            - PrivateSubnet1CIDR
+            - PrivateSubnet2CIDR
+
+    ParameterLabels:
+      S3BucketName:
+        default: "Bucket Name"
+      DirsToCreate:
+        default: "Directories under S3 bucket"
+      DatabaseName:
+        default: "Database Name"
+      AdminUsername:
+        default: "Admin User Name"
+      AdminUserPassword:
+        default: "Admin User Password"
+      NamespaceName:
+        default: "Namespace"
+      WorkgroupName:
+        default: "Workgroup"
+      BaseRPU:
+        default: "Base RPU"
+      SubnetId:
+        default: "Subnet Ids (Select 3 Subnet Ids spanning 3 AZs)"
+      SecurityGroupIds:
+        default: "Security Group Id"
+      EnhancedVpcRouting:
+        default: "Enhanced VPC Routing"  
+      VpcId:
+        default: "VPC Id"  
+      RouteTableId:
+        default: "RouteTable Id"    
+      LogExportsList:
+        default: "Log Export List"
+      GlueCrawlerName:
+        default: "Glue Crawler Name"
+      GlueDatabaseName:
+        default: "Glue Database Name" 
+      GlueTableName:
+        default: "Glue Table Name" 
+      GlueConnectionName:
+        default: "Glue Connection Name"
+      GlueJobName:
+        default: "Glue Job Name" 
+      GlueScriptsPath:
+        default: "Glue Scripts Path"   
+      MwaaVpcCIDR:
+        default: "MWAA VPC CIDR"
+      MwaaPublicSubnet1CIDR:
+        default: "MWAA Public Subnet1 CIDR"        
+      MwaaPublicSubnet2CIDR:
+        default: "MWAA Public Subnet2 CIDR"    
+      MwaaPrivateSubnet1CIDR:
+        default: "MWAA Private Subnet1 CIDR"    
+      MwaaPrivateSubnet2CIDR:
+        default: "MWAA Private Subnet2 CIDR"    
+
+Resources:
+
+### AMAZON S3 RESOURCES ###
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+
+  S3CustomResource:
+    Type: Custom::S3CustomResource
+    Properties:
+      ServiceToken: !GetAtt AWSLambdaFunction.Arn
+      the_bucket: !Ref S3Bucket
+      dirs_to_create: !Ref DirsToCreate
+
+  AWSLambdaFunction:
+     Type: "AWS::Lambda::Function"
+     Properties:
+       Description: "Work with S3 Buckets!"
+       FunctionName: !Sub '${AWS::StackName}-${AWS::Region}-lambda'
+       Handler: index.handler
+       Role: !GetAtt AWSLambdaExecutionRole.Arn
+       Timeout: 360
+       Runtime: python3.12
+       Code:
+         ZipFile: |
+          import boto3
+          import cfnresponse
+          def handler(event, context):
+              # Init ...
+              the_event = event['RequestType']
+              print("The event is: ", str(the_event))
+              response_data = {}
+              s_3 = boto3.client('s3')
+              # Retrieve parameters
+              the_bucket = event['ResourceProperties']['the_bucket']
+              dirs_to_create = event['ResourceProperties']['dirs_to_create']
+              try:
+                  if the_event in ('Create', 'Update'):
+                      print("Requested folders: ", str(dirs_to_create))
+                      for dir_name in dirs_to_create:
+                          print("Creating: ", str(dir_name))
+                          s_3.put_object(Bucket=the_bucket,
+                                         Key=(dir_name
+                                              + '/'))
+                  elif the_event == 'Delete':
+                      print("Deleting S3 content...")
+                      b_operator = boto3.resource('s3')
+                      b_operator.Bucket(str(the_bucket)).objects.all().delete()
+                  # Everything OK... send the signal back
+                  print("Operation successful!")
+                  cfnresponse.send(event,
+                                   context,
+                                   cfnresponse.SUCCESS,
+                                   response_data)
+              except Exception as e:
+                  print("Operation failed...")
+                  print(str(e))
+                  response_data['Data'] = str(e)
+                  cfnresponse.send(event,
+                                   context,
+                                   cfnresponse.FAILED,
+                                   response_data)
+
+
+  AWSLambdaExecutionRole:
+     Type: AWS::IAM::Role
+     Properties:
+       AssumeRolePolicyDocument:
+         Statement:
+         - Action:
+           - sts:AssumeRole
+           Effect: Allow
+           Principal:
+             Service:
+             - lambda.amazonaws.com
+         Version: '2012-10-17'
+       Path: "/"
+       Policies:
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - logs:CreateLogGroup
+             - logs:CreateLogStream
+             - logs:PutLogEvents
+             Effect: Allow
+             Resource: arn:aws:logs:*:*:*
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambda-CW
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:PutObject
+             - s3:DeleteObject
+             - s3:ListBucket
+             - s3:ListAllMyBuckets
+             - s3:ListMultipartUploadParts
+             - s3:ListBucketMultipartUploads
+             - s3:ListBucketVersions
+             Effect: Allow
+             Resource:
+             - !Sub arn:aws:s3:::${S3Bucket}/*
+             - !Sub arn:aws:s3:::${S3Bucket}
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambda-S3
+       RoleName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambdaExecutionRole
+
+### AMAZON REDSHIFT RESOURCES ###
+
+  RedshiftRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - redshift-serverless.amazonaws.com
+            - redshift.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonRedshiftAllCommandsFullAccess
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+
+  RedshiftServerlessNamespace:
+    Type: 'AWS::RedshiftServerless::Namespace'
+    Properties:
+      AdminUsername:
+        Ref: AdminUsername
+      AdminUserPassword:
+        Ref: AdminUserPassword
+      DbName:
+        Ref: DatabaseName
+      NamespaceName:
+        Ref: NamespaceName
+      IamRoles:
+        - Fn::GetAtt: [ RedshiftRole, Arn ]
+      LogExports:
+        Ref: LogExportsList       
+
+  RedshiftServerlessWorkgroup:
+    Type: 'AWS::RedshiftServerless::Workgroup'
+    Properties:
+      WorkgroupName:
+        Ref: WorkgroupName
+      NamespaceName:
+        Ref: NamespaceName
+      BaseCapacity:
+        Ref: BaseRPU
+      PubliclyAccessible: false
+      SubnetIds:
+        Ref: SubnetId
+      SecurityGroupIds:
+        Ref: SecurityGroupIds
+      EnhancedVpcRouting:
+        Ref: EnhancedVpcRouting        
+    DependsOn:
+      - RedshiftServerlessNamespace
+
+### AWS GLUE RESOURCES ###
+ 
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - glue.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+ 
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Ref GlueCrawlerName
+      Role: !Ref GlueRole
+      Description: Glue Crawler to crawl products data
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Ref SourceS3Path
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
+
+  GlueConnectionRedshift:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput: 
+        Description: "Connection to Redshift"
+        ConnectionType: "JDBC"
+        PhysicalConnectionRequirements:
+          AvailabilityZone: !Ref AWS::Region
+          SecurityGroupIdList: !Ref SecurityGroupIds
+          SubnetId: !Select [ 0, !Ref SubnetId ] 
+        ConnectionProperties: {
+          "JDBC_CONNECTION_URL": !Sub "jdbc:redshift://${WorkgroupName}.${AWS::AccountId}.${AWS::Region}.redshift-serverless.amazonaws.com:5439/${DatabaseName}",
+          "USERNAME": !Ref AdminUsername,
+          "PASSWORD": !Ref AdminUserPassword
+        }
+        Name: !Ref GlueConnectionName
+
+  GlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Role: !Ref GlueRole
+      Connections: 
+        Connections: 
+          - !Ref GlueConnectionName 
+      Command: 
+        Name: glueetl
+        ScriptLocation: !Ref GlueScriptsPath
+      ExecutionProperty:
+        MaxConcurrentRuns: 2
+      GlueVersion: 4.0
+      NumberOfWorkers: 10
+      WorkerType: G.1X
+      MaxRetries: 0
+      Name: !Ref GlueJobName
+
+
+### GATEWAY ENDPOINT ###
+
+  S3GatewayEndpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      VpcEndpointType: 'Gateway'
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: '*'
+            Resource: '*'
+      RouteTableIds:
+        - !Ref RouteTableId
+
+
+### MWAA RESOURCES ###
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: 'mwaa-vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: 'mwaa-ig'
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: MWAA Public Subnet (AZ1)
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: MWAA Public Subnet (AZ2)
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: MWAA Private Subnet (AZ1)
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: MWAA Private Subnet (AZ2)
+
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: MWAA Public Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: MWAA Private Routes (AZ1)
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: MWAA Private Routes (AZ2)
+
+  DefaultPrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "mwaa-security-group"
+      GroupDescription: "Security group with a self-referencing inbound rule."
+      VpcId: !Ref VPC
+
+  SecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: "-1"
+      SourceSecurityGroupId: !Ref SecurityGroup
+ 
+  SecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Description: Allow all outbound traffic
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: "-1"
+      CidrIp: 0.0.0.0/0
+
+  MwaaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - airflow-env.amazonaws.com
+                - airflow.amazonaws.com
+            Action:
+             - "sts:AssumeRole"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonRedshiftAllCommandsFullAccess
+        - arn:aws:iam::aws:policy/AmazonRedshiftDataFullAccess
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Policies:
+        - PolicyName: "AmazonMWAA-S3AccessPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:GetObject"
+                  - "s3:GetBucketAcl"
+                  - "s3:GetBucketCors"
+                  - "s3:GetEncryptionConfiguration"
+                  - "s3:GetBucketLocation"
+                  - "s3:ListBucket"
+                  - "s3:ListAllMyBuckets"
+                  - "s3:ListMultipartUploadParts"
+                  - "s3:ListBucketMultipartUploads"
+                  - "s3:PutObject"
+                  - "s3:PutBucketAcl"
+                  - "s3:PutBucketCors"
+                  - "s3:DeleteObject"
+                  - "s3:AbortMultipartUpload"
+                  - "s3:CreateBucket" 
+                Resource: 
+                  - "arn:aws:s3:::airflow-*"
+                  - "arn:aws:s3:::airflow-*/*"
+      
+  MwaaExecutionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Roles:
+        - !Ref MwaaExecutionRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: airflow:PublishMetrics
+            Resource:
+               - !Sub "arn:aws:airflow:${AWS::Region}:${AWS::AccountId}:environment/${AWS::StackName}-MwaaEnvironment"
+          - Effect: Deny
+            Action: s3:ListAllMyBuckets
+            Resource:
+              - !GetAtt S3Bucket.Arn
+              - !Sub "${S3Bucket.Arn}/*"
+          - Effect: Allow
+            Action:
+              - "s3:GetObject*"
+              - "s3:GetBucket*"
+              - "s3:List*"
+            Resource:
+              - !GetAtt S3Bucket.Arn
+              - !Sub "${S3Bucket.Arn}/*"
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:CreateLogGroup
+              - logs:PutLogEvents
+              - logs:GetLogEvents
+              - logs:GetLogRecord
+              - logs:GetLogGroupFields
+              - logs:GetQueryResults
+              - logs:DescribeLogGroups
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:airflow-${AWS::StackName}*"
+          - Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - sqs:ChangeMessageVisibility
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+              - sqs:ReceiveMessage
+              - sqs:SendMessage
+            Resource:
+              - !Sub "arn:aws:sqs:${AWS::Region}:*:airflow-celery-*"
+          - Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - "kms:GenerateDataKey*"
+              - kms:Encrypt
+            NotResource: !Sub "arn:aws:kms:*:${AWS::AccountId}:key/*"
+            Condition:
+              StringLike:
+                "kms:ViaService":
+                  - !Sub "sqs.${AWS::Region}.amazonaws.com"
+
+  MwaaEnvironment: 
+    Type: "AWS::MWAA::Environment"
+    Properties: 
+      AirflowVersion: '2.8.1'
+      DagS3Path: dags
+      EnvironmentClass: mw1.small
+      ExecutionRoleArn: !GetAtt MwaaExecutionRole.Arn
+      LoggingConfiguration: 
+        DagProcessingLogs: 
+          Enabled: true
+          LogLevel: INFO
+        SchedulerLogs: 
+          Enabled: false
+          LogLevel: INFO
+        TaskLogs: 
+          Enabled: true
+          LogLevel: INFO
+        WebserverLogs: 
+          Enabled: false
+          LogLevel: INFO
+        WorkerLogs: 
+          Enabled: false
+          LogLevel: INFO
+      MaxWorkers: 10
+      MinWorkers: 1
+      Name: 'sample-airflow-instance'
+      NetworkConfiguration: 
+        SecurityGroupIds: 
+          - !Ref SecurityGroup
+        SubnetIds: 
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+      Schedulers: 2
+      SourceBucketArn: !Sub arn:aws:s3:::${S3Bucket}
+      WebserverAccessMode : PUBLIC_ONLY
+
